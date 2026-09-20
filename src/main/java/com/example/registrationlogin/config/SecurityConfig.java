@@ -14,6 +14,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -22,7 +23,18 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
 
-    @Value("${app.cors.allowed-origin}")
+    /*
+     * This value comes from application.properties/application.yml
+     * or from the Render environment variable:
+     *
+     * APP_CORS_ALLOWED_ORIGIN
+     *
+     * Example:
+     * https://your-project.vercel.app
+     *
+     * The localhost default keeps your local development working.
+     */
+    @Value("${app.cors.allowed-origin:http://localhost:3000}")
     private String allowedOrigin;
 
     public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
@@ -31,36 +43,105 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
         http
-                .csrf(csrf -> csrf.disable()) // stateless JWT-cookie API; CSRF handled by SameSite cookie policy
+                // Disable CSRF because this is a stateless JWT API.
+                .csrf(csrf -> csrf.disable())
+
+                // Enable CORS.
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
+                // Do not create server-side sessions.
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // API authorization rules.
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/api/registration").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/login").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/logout").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/user/me").authenticated()
+
+                        // Anyone can register.
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/registration")
+                        .permitAll()
+
+                        // Anyone can login.
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/login")
+                        .permitAll()
+
+                        // Anyone can logout.
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/logout")
+                        .permitAll()
+
+                        // User information requires JWT authentication.
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/user/me")
+                        .authenticated()
+
+                        // Everything else requires authentication.
                         .anyRequest().authenticated())
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+
+                // Run JWT authentication before Spring's
+                // UsernamePasswordAuthenticationFilter.
+                .addFilterBefore(
+                        jwtAuthFilter,
+                        UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
     /**
-     * Explicit, non-wildcard CORS origin so that credentialed (cookie-based)
-     * requests are allowed, per Spring Security's requirement that
-     * allow-credentials cannot be combined with "*".
+     * CORS configuration for the React/Vercel frontend.
+     *
+     * Credentials are enabled because your application
+     * uses an HttpOnly JWT cookie.
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of(allowedOrigin));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
+
+        /*
+         * Supports one or multiple origins.
+         *
+         * For example, Render can receive:
+         *
+         * APP_CORS_ALLOWED_ORIGIN=
+         * https://your-project.vercel.app,http://localhost:3000
+         */
+        List<String> origins = Arrays.stream(
+                allowedOrigin.split(","))
+                .map(origin -> origin.trim())
+                .filter(origin -> !origin.isEmpty())
+                .toList();
+
+        configuration.setAllowedOrigins(origins);
+
+        configuration.setAllowedMethods(
+                List.of(
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE",
+                        "OPTIONS"));
+
+        configuration.setAllowedHeaders(
+                List.of("*"));
+
+        /*
+         * REQUIRED for your JWT cookie.
+         */
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
+
+        source.registerCorsConfiguration(
+                "/**",
+                configuration);
+
         return source;
     }
 }
